@@ -30,9 +30,22 @@
     </style>
   </head>
   <body>
+
+</div>
     <!-- The Raycaster updates this container when hovering over a node -->
-    <div id="species-hud"></div>
-    <div id="tooltip" style="position: absolute; display: none; background: rgba(10, 10, 20, 0.85); color: #fff; padding: 8px 12px; font-family: monospace; font-size: 12px; border: 1px solid #3ae374; border-radius: 4px; pointer-events: none; z-index: 100;"></div>
+  <div id="tooltip" style="position: absolute; display: none; background: rgba(10, 10, 20, 0.85); color: #fff; padding: 8px 12px; font-family: monospace; font-size: 12px; border: 1px solid #3ae374; border-radius: 4px; pointer-events: none; z-index: 100;"></div>
+
+  <!-- 🪐 INJECT NEW MINIMALIST UI GLASS CARD HERE -->
+  <div id="ui-container" class="hidden">
+      <div class="card-glass">
+          <!-- Close Action Button -->
+          <button id="close-card-btn" class="close-btn">&times;</button>
+          
+          <!-- Clean Header Only -->
+          <h2 id="ui-title" class="remnant-title">Select an Active Reserve</h2>
+          <div class="divider-line"></div>
+      </div>
+  </div>
 
     <script type="module" src="/sandbox.js"></script>
   </body>
