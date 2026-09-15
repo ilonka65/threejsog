@@ -4,50 +4,19 @@
     <meta charset="utf-8">
     <title>3D Big Scrub Map</title>
     <style>
+      /* Removes all margins and locks the canvas to perfectly fill the screen */
       body { 
         margin: 0; 
         overflow: hidden; 
-        background: #000;
+        background: #000000;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      }
-      /* Floating Museum-Grade HUD Container */
-      #species-hud {
-        position: absolute;
-        top: 20px;
-        right: 20px;
-        width: 320px;
-        background: rgba(5, 15, 10, 0.85);
-        border: 2px solid #39ff14;
-        border-radius: 8px;
-        padding: 16px;
-        color: #ffffff;
-        pointer-events: none; /* Allows mouse interactions to pass right through to canvas */
-        opacity: 0;
-        transition: opacity 0.25s ease, border-color 0.25s ease;
-        box-shadow: 0 0 20px rgba(0, 255, 100, 0.2);
-        z-index: 10;
       }
     </style>
   </head>
   <body>
-
-</div>
-    <!-- The Raycaster updates this container when hovering over a node -->
-  <div id="tooltip" style="position: absolute; display: none; background: rgba(10, 10, 20, 0.85); color: #fff; padding: 8px 12px; font-family: monospace; font-size: 12px; border: 1px solid #3ae374; border-radius: 4px; pointer-events: none; z-index: 100;"></div>
-
-  <!-- 🪐 INJECT NEW MINIMALIST UI GLASS CARD HERE -->
-  <div id="ui-container" class="hidden">
-      <div class="card-glass">
-          <!-- Close Action Button -->
-          <button id="close-card-btn" class="close-btn">&times;</button>
-          
-          <!-- Clean Header Only -->
-          <h2 id="ui-title" class="remnant-title">Select an Active Reserve</h2>
-          <div class="divider-line"></div>
-      </div>
-  </div>
-
+    
+    <!-- All 3D rendering, Audio, Tooltips, and UI Cards are generated purely by the JS engine! -->
     <script type="module" src="/sandbox.js"></script>
+    
   </body>
 </html>
-
