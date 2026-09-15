@@ -16,21 +16,29 @@ function updateTerrainShaders() {
 updateTerrainShaders(); 
 
 export async function loadLocalTerrain(remnantId, anchorPosition, scene) {
-    if (terrainCache.has(remnantId)) return terrainCache.get(remnantId);
+    // 🛡️ CRITICAL SAFEFUARD: Check that 'scene' is actually a THREE.Scene!
+    if (!scene || typeof scene.add !== 'function') {
+        console.error("Loader Error: Expected a THREE.Scene as the 3rd argument, but got:", scene);
+        return null;
+    }
+
+    if (terrainCache.has(remnantId)) {
+        terrainCache.get(remnantId).visible = true; 
+        return terrainCache.get(remnantId);
+    }
 
     const totalSpecies = bigScrubEcosystem.length;
     const gondwanaCount = bigScrubEcosystem.filter(s => s.origin === "Gondwana").length;
     const gondwanaRatio = gondwanaCount / totalSpecies; 
 
-    // Cloudflare Edge Cache lock
-    const r2Url = `https://ilonka.io/${remnantId}/remnant_${remnantId}.xyz?v=final`;
+    const r2Url = `https://ilonka.io/${remnantId}/remnant_${remnantId}.xyz`;
     const loader = new THREE.FileLoader();
 
     try {
         const rawData = await loader.loadAsync(r2Url);
         const lines = rawData.split('\n');
         
-        // 🛡️ THE SAFETY VALVE: Protects the browser from massive 200MB+ files!
+        // 🛡️ SAFETY VALVE: Max 150k points keeps the browser fast and the Ghost Trees airy!
         const MAX_POINTS = 150000;
         const samplingStep = lines.length > MAX_POINTS ? Math.ceil(lines.length / MAX_POINTS) : 1; 
 
@@ -38,24 +46,19 @@ export async function loadLocalTerrain(remnantId, anchorPosition, scene) {
         let minY = Infinity, maxY = -Infinity;
         let minZ = Infinity, maxZ = -Infinity;
 
-        // --- PASS 1: Get Raw ELVIS Bounds ---
+        // --- PASS 1: Find Cloud Center ---
         for (let i = 0; i < lines.length; i += samplingStep) {
             const line = lines[i].trim();
             if (!line) continue;
-
             const coords = line.split(/[\s,]+/); 
             if (coords.length >= 3) {
-                const x = parseFloat(coords[0]); // Easting
-                const y = parseFloat(coords[1]); // Northing
-                const z = parseFloat(coords[2]); // Elevation
-
+                const x = parseFloat(coords[0]);
+                const y = parseFloat(coords[1]); 
+                const z = parseFloat(coords[2]);
                 if (!isNaN(x) && !isNaN(y) && !isNaN(z)) {
-                    if (x < minX) minX = x;
-                    if (x > maxX) maxX = x;
-                    if (y < minY) minY = y;
-                    if (y > maxY) maxY = y;
-                    if (z < minZ) minZ = z;
-                    if (z > maxZ) maxZ = z;
+                    if (x < minX) minX = x; if (x > maxX) maxX = x;
+                    if (y < minY) minY = y; if (y > maxY) maxY = y;
+                    if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
                 }
             }
         }
@@ -67,12 +70,13 @@ export async function loadLocalTerrain(remnantId, anchorPosition, scene) {
         const centerX = minX + (xDelta / 2);
         const centerY = minY + (yDelta / 2); 
 
+        // 🎯 THE DIORAMA EFFECT: Blow the trees up to look huge and majestic!
+        const DIORAMA_SCALE = 0.045;  
+        const HEIGHT_EXAGGERATION = 6.0;
+
         const positions = [];
         const normYArray = []; 
         const randomArray = []; 
-
-        // 🎯 THE DIORAMA SCALE: Blows the 3D trees up to look huge and majestic!
-        const finalScale = 0.035;  
 
         // --- PASS 2: Assemble Buffers ---
         for (let i = 0; i < lines.length; i += samplingStep) {
@@ -86,14 +90,13 @@ export async function loadLocalTerrain(remnantId, anchorPosition, scene) {
                 const z = parseFloat(coords[2]);
 
                 if (!isNaN(x) && !isNaN(y) && !isNaN(z)) {
-                    
-                    // Center the 3D model on itself so it can be blown up perfectly
-                    const localX = x - centerX;
-                    const localY = z - minZ;       
-                    const localZ = -(y - centerY); 
+                    // Center internally, scale to Diorama size, and correct the axes!
+                    const localX = (x - centerX) * DIORAMA_SCALE;
+                    const localY = (z - minZ) * DIORAMA_SCALE * HEIGHT_EXAGGERATION;       
+                    const localZ = -(y - centerY) * DIORAMA_SCALE; 
 
                     positions.push(localX, localY, localZ);
-                    normYArray.push(zDelta > 0 ? localY / zDelta : 0.5);
+                    normYArray.push(zDelta > 0 ? (z - minZ) / zDelta : 0.5);
                     randomArray.push(Math.random());
                 }
             }
@@ -104,8 +107,9 @@ export async function loadLocalTerrain(remnantId, anchorPosition, scene) {
         geometry.setAttribute('aNormY', new THREE.Float32BufferAttribute(normYArray, 1));
         geometry.setAttribute('aRandom', new THREE.Float32BufferAttribute(randomArray, 1));
 
+        // 🪄 GHOST TREES RESTORED!
         const material = new THREE.PointsMaterial({
-            size: 0.12, // 🎯 Large enough to create a glowing canopy!
+            size: 0.15, // Large enough to form a glowing canopy
             transparent: true,
             opacity: 0.0,
             blending: THREE.AdditiveBlending, 
@@ -179,16 +183,13 @@ export async function loadLocalTerrain(remnantId, anchorPosition, scene) {
 
         const terrainPoints = new THREE.Points(geometry, material);
         
-        // 🎯 TOWERING HEIGHT: Elevates the canopy significantly over the map
-        const heightExaggeration = 6.0; 
-        terrainPoints.scale.set(finalScale, finalScale * heightExaggeration, finalScale);
-        
-        // 🎯 ANCHORED: Pins the giant diorama piece perfectly to the map shape's center
+        // 📍 Pin the giant diorama piece perfectly to the map shape's center
         terrainPoints.position.set(anchorPosition.x, 0.15, anchorPosition.z);
 
         scene.add(terrainPoints);
         terrainCache.set(remnantId, terrainPoints);
 
+        // 🛡️ Cap the opacity at 45% so the Additive glow stays beautiful!
         let frame = 0;
         function fade() {
             frame++;

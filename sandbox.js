@@ -21,8 +21,8 @@ controls.dampingFactor = 0.05;
 controls.maxPolarAngle = Math.PI / 2 - 0.01; 
 
 const textureLoader = new THREE.TextureLoader();
-textureLoader.setCrossOrigin('anonymous'); // 🛡️ Prevents CORS security blocks!
-const floorTexture = textureLoader.load('https://ilonka.io/big_scrub_floor.png');
+textureLoader.setCrossOrigin('anonymous'); 
+const floorTexture = textureLoader.load('https://ilonka.io/big_scrub_floor.png'); 
 
 const floorGeometry = new THREE.PlaneGeometry(1, 1);
 const floorMaterial = new THREE.MeshBasicMaterial({
@@ -143,7 +143,7 @@ async function buildDynamicEcosystemMatrix() {
     });
 
     await Promise.all(loadPromises);
-    console.log(`☁️ Dynamic Gaussian Cloud Online: ${genomicMatrixGroup.children.length} FASTA layers dispersed.`);
+    console.log(`☁️ Dynamic Gaussian Cloud Online.`);
 }
 buildDynamicEcosystemMatrix();
 
@@ -233,13 +233,7 @@ async function loadGeoJsonAnchors() {
                 const lowerGeoName = geojsonName.toLowerCase();
 
                 const activeKeywords = ["victoria", "booyong", "big scrub", "minyon", "boomerang"];
-                const realTitles = [
-                    "Victoria Park Nature Reserve",
-                    "Booyong Flora Reserve",
-                    "Big Scrub Flora Reserve",
-                    "Minyon Falls Nature Reserve",
-                    "Boomerang Falls Flora Reserve"
-                ];
+                const realTitles = ["Victoria Park Nature Reserve", "Booyong Flora Reserve", "Big Scrub Flora Reserve", "Minyon Falls Nature Reserve", "Boomerang Falls Flora Reserve"];
 
                 const activeIndex = activeKeywords.findIndex(keyword => lowerGeoName.includes(keyword));
                 const isActive = activeIndex !== -1;
@@ -272,7 +266,7 @@ async function loadGeoJsonAnchors() {
         });
 
     } catch (error) {
-        console.error("Geo-Bounding Matrix Alignment error:", error);
+        console.error("Geo-Bounding Matrix error:", error);
     }
 }
 loadGeoJsonAnchors();
@@ -285,6 +279,11 @@ const mouse = new THREE.Vector2(-1, -1);
 let targetedTrackObject = null;
 let isCardLocked = false; 
 
+// 🚀 GLOBAL CAMERA SWOOP TARGETS
+let targetCameraPosition = null;
+let targetLookAtPosition = null;
+let isSwooping = false;
+
 const visualHudCard = document.createElement('div');
 visualHudCard.style.cssText = `
   position: absolute; bottom: 40px; left: 40px;
@@ -296,11 +295,25 @@ visualHudCard.style.cssText = `
 `;
 document.body.appendChild(visualHudCard);
 
+// 🚀 ESCAPE BUTTON: Unlocks the camera and flies back to the sky!
 window.closeHudCard = function(e) {
     if(e) e.stopPropagation();
     isCardLocked = false;
     visualHudCard.style.opacity = "0";
     visualHudCard.style.pointerEvents = "none";
+
+    targetCameraPosition = new THREE.Vector3(0, 40, 60);
+    targetLookAtPosition = new THREE.Vector3(0, 0, 0);
+    
+    controls.maxPolarAngle = Math.PI / 2 - 0.01; 
+    
+    controls.enabled = false; 
+    isSwooping = true;
+
+    if (gainNode && audioCtx) {
+        gainNode.gain.cancelScheduledValues(audioCtx.currentTime);
+        gainNode.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 1.5);
+    }
 };
 
 const remnantTooltip = document.createElement('div');
@@ -330,7 +343,6 @@ function checkHovers() {
         const primaryHit = sphereIntersections[0].object;
         if (targetedTrackObject !== primaryHit) {
             if (targetedTrackObject) targetedTrackObject.material.size = 0.1;
-
             targetedTrackObject = primaryHit;
             targetedTrackObject.material.size = 0.3; 
 
@@ -366,7 +378,6 @@ function checkHovers() {
             cursorIsPointer = true; 
             remnantTooltip.style.display = 'block';
             remnantTooltip.innerText = hitObject.userData.name; 
-            
             hitObject.material.opacity = 0.9;
         } else {
             remnantTooltip.style.display = 'none';
@@ -379,11 +390,6 @@ function checkHovers() {
 
     document.body.style.cursor = cursorIsPointer ? 'pointer' : 'default';
 }
-
-let targetCameraPosition = null;
-let targetLookAtPosition = null;
-let isSwooping = false;
-let isTransitioning = false; 
 
 let audioCtx;
 let gainNode;
@@ -412,6 +418,8 @@ window.triggerAudioVolumeSwell = function(targetVol = 0.75) {
 };
 
 window.addEventListener('click', (event) => {
+    if (event.target.id === 'close-card-btn') return;
+
     const rect = renderer.domElement.getBoundingClientRect();
     mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
@@ -419,11 +427,6 @@ window.addEventListener('click', (event) => {
     if (!isAudioInitialized) initAudioAPI();
     if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
     
-    if (gainNode && audioCtx) {
-        gainNode.gain.cancelScheduledValues(audioCtx.currentTime);
-        gainNode.gain.linearRampToValueAtTime(0.05, audioCtx.currentTime + 1.0);
-    }
-
     raycaster.setFromCamera(mouse, camera);
     const intersects = raycaster.intersectObjects(remnantsGroup.children, true);
 
@@ -440,19 +443,44 @@ window.addEventListener('click', (event) => {
             const targetX = hitObject.userData.centroidX;
             const targetZ = hitObject.userData.centroidZ;
 
-            // 🎯 PASS ANCHOR TO LOAD LOCAL TERRAIN
+            // 🎯 PASS EXACTLY 3 ARGUMENTS!
             const anchorPos = new THREE.Vector3(targetX, 0, targetZ);
             loadLocalTerrain(remnantId, anchorPos, scene);
 
-            document.getElementById("ui-title").innerText = hitObject.userData.name;
-            document.getElementById("ui-container").classList.remove("hidden");
+            isCardLocked = true;
+            visualHudCard.innerHTML = `
+                <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px;">
+                    <div style="color: #00ffcc; font-size: 10px; letter-spacing: 2px;">RESERVE ACTIVE</div>
+                    <button id="close-card-btn" onclick="window.closeHudCard(event)" style="background: none; border: none; color: white; cursor: pointer; font-size: 18px; line-height: 10px;">✕</button>
+                </div>
+                <div style="font-size: 18px; font-weight: bold; color: #fff; margin-bottom: 12px;">${hitObject.userData.name}</div>
+                <div style="font-size: 11px; color: #aaa;">Immersive Forest rendering online. Use your mouse to explore the canopy.</div>
+            `;
+            visualHudCard.style.opacity = "1";
+            visualHudCard.style.pointerEvents = "auto";
 
-            targetCameraPosition = new THREE.Vector3(targetX, 8, targetZ + 12);
-            targetLookAtPosition = new THREE.Vector3(targetX, 0, targetZ);
+            targetCameraPosition = new THREE.Vector3(targetX, 2.0, targetZ + 15.0);
+            targetLookAtPosition = new THREE.Vector3(targetX, 8.0, targetZ);
+            
+            controls.maxPolarAngle = Math.PI; 
             
             isSwooping = true;
             controls.enabled = false; 
+            
+            if (gainNode && audioCtx) {
+                gainNode.gain.cancelScheduledValues(audioCtx.currentTime);
+                gainNode.gain.linearRampToValueAtTime(0.05, audioCtx.currentTime + 1.0);
+            }
         }
+    }
+});
+
+// 🎥 CINEMATIC MODE HOTKEY: Press 'H' to hide/show the UI and grid!
+window.addEventListener('keydown', (event) => {
+    if (event.key.toLowerCase() === 'h') {
+        gridHelper.visible = !gridHelper.visible;
+        visualHudCard.style.display = gridHelper.visible ? 'block' : 'none';
+        remnantTooltip.style.display = 'none';
     }
 });
 
@@ -469,12 +497,16 @@ function animate() {
         camera.position.lerp(targetCameraPosition, 0.05);
         controls.target.lerp(targetLookAtPosition, 0.05);
         
-        if (camera.position.distanceTo(targetCameraPosition) < 0.1) {
+        if (camera.position.distanceTo(targetCameraPosition) < 1.5) {
+            camera.position.copy(targetCameraPosition);
+            controls.target.copy(targetLookAtPosition);
+
             targetCameraPosition = null;
             targetLookAtPosition = null;
             
-            isTransitioning = false; 
+            isSwooping = false; 
             controls.enabled = true; 
+            controls.update(); 
             triggerAudioVolumeSwell(0.75);
         }
     }
