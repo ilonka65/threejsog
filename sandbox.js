@@ -153,6 +153,8 @@ buildDynamicEcosystemMatrix();
 const remnantsGroup = new THREE.Group();
 scene.add(remnantsGroup);
 
+let mapCalibration = {};
+
 async function loadGeoJsonAnchors() {
     try {
         const boundaryResponse = await fetch(`https://ilonka.io/boundary.geojson`);
@@ -183,6 +185,8 @@ async function loadGeoJsonAnchors() {
         const finalScaleZ = mapHeight / deltaY; 
         const finalOffsetX = 0;          
         const finalOffsetZ = 0;         
+
+        mapCalibration = { geoCenterX, geoCenterY, finalScaleX, finalScaleZ, finalOffsetX, finalOffsetZ };
 
         const remnantsResponse = await fetch(`https://ilonka.io/remnants.geojson`);
         const remnantsData = await remnantsResponse.json();
@@ -216,11 +220,13 @@ async function loadGeoJsonAnchors() {
                 const localZ = (-(northing - geoCenterY) * finalScaleZ) + finalOffsetZ;
 
                 const shape = new THREE.Shape(); 
+                let worldPolygon = [];
 
                 if (polygonPath.length > 0) {
                     polygonPath.forEach(([px, py], pIdx) => {
                         const sceneX = ((px - geoCenterX) * finalScaleX) + finalOffsetX;
                         const sceneZ = (-(py - geoCenterY) * finalScaleZ) + finalOffsetZ;
+                        worldPolygon.push([sceneX, sceneZ]);
 
                         if (pIdx === 0) shape.moveTo(sceneX, -sceneZ);
                         else shape.lineTo(sceneX, -sceneZ);
@@ -279,11 +285,6 @@ const mouse = new THREE.Vector2(-1, -1);
 let targetedTrackObject = null;
 let isCardLocked = false; 
 
-// 🚀 GLOBAL CAMERA SWOOP TARGETS
-let targetCameraPosition = null;
-let targetLookAtPosition = null;
-let isSwooping = false;
-
 const visualHudCard = document.createElement('div');
 visualHudCard.style.cssText = `
   position: absolute; bottom: 40px; left: 40px;
@@ -295,7 +296,6 @@ visualHudCard.style.cssText = `
 `;
 document.body.appendChild(visualHudCard);
 
-// 🚀 ESCAPE BUTTON: Unlocks the camera and flies back to the sky!
 window.closeHudCard = function(e) {
     if(e) e.stopPropagation();
     isCardLocked = false;
@@ -306,6 +306,9 @@ window.closeHudCard = function(e) {
     targetLookAtPosition = new THREE.Vector3(0, 0, 0);
     
     controls.maxPolarAngle = Math.PI / 2 - 0.01; 
+    
+    // 🛑 CAMERA FIX: Stop rotating when we zoom back out!
+    controls.autoRotate = false;
     
     controls.enabled = false; 
     isSwooping = true;
@@ -343,6 +346,7 @@ function checkHovers() {
         const primaryHit = sphereIntersections[0].object;
         if (targetedTrackObject !== primaryHit) {
             if (targetedTrackObject) targetedTrackObject.material.size = 0.1;
+
             targetedTrackObject = primaryHit;
             targetedTrackObject.material.size = 0.3; 
 
@@ -390,6 +394,10 @@ function checkHovers() {
 
     document.body.style.cursor = cursorIsPointer ? 'pointer' : 'default';
 }
+
+let targetCameraPosition = null;
+let targetLookAtPosition = null;
+let isSwooping = false;
 
 let audioCtx;
 let gainNode;
@@ -440,12 +448,7 @@ window.addEventListener('click', (event) => {
         if (hitObject.userData.isActiveTerrain) {
             const remnantId = hitObject.userData.remnantId;
 
-            const targetX = hitObject.userData.centroidX;
-            const targetZ = hitObject.userData.centroidZ;
-
-            // 🎯 PASS EXACTLY 3 ARGUMENTS!
-            const anchorPos = new THREE.Vector3(targetX, 0, targetZ);
-            loadLocalTerrain(remnantId, anchorPos, scene);
+            loadLocalTerrain(remnantId, new THREE.Vector3(hitObject.userData.centroidX, 0, hitObject.userData.centroidZ), scene);
 
             isCardLocked = true;
             visualHudCard.innerHTML = `
@@ -459,11 +462,13 @@ window.addEventListener('click', (event) => {
             visualHudCard.style.opacity = "1";
             visualHudCard.style.pointerEvents = "auto";
 
+            const targetX = hitObject.userData.centroidX;
+            const targetZ = hitObject.userData.centroidZ;
+
             targetCameraPosition = new THREE.Vector3(targetX, 2.0, targetZ + 15.0);
             targetLookAtPosition = new THREE.Vector3(targetX, 8.0, targetZ);
             
             controls.maxPolarAngle = Math.PI; 
-            
             isSwooping = true;
             controls.enabled = false; 
             
@@ -475,14 +480,106 @@ window.addEventListener('click', (event) => {
     }
 });
 
-// 🎥 CINEMATIC MODE HOTKEY: Press 'H' to hide/show the UI and grid!
+// ==========================================
+// 🤖 EXHIBITION CONTROLS (Cinematic & Autopilot)
+// ==========================================
+let autopilotTimer = null;
+let currentTourIndex = 0;
+let isAutopilotRunning = false;
+
 window.addEventListener('keydown', (event) => {
+    // 🖥️ FULLSCREEN HOTKEY: Press 'F'
+    if (event.key.toLowerCase() === 'f') {
+        if (!document.fullscreenElement) {
+            document.documentElement.requestFullscreen().catch(err => console.log(err));
+        } else {
+            document.exitFullscreen();
+        }
+    }
+
+    // 🎥 CINEMATIC MODE HOTKEY: Press 'H'
     if (event.key.toLowerCase() === 'h') {
         gridHelper.visible = !gridHelper.visible;
         visualHudCard.style.display = gridHelper.visible ? 'block' : 'none';
         remnantTooltip.style.display = 'none';
     }
+    
+    // 🤖 AUTOPILOT TOUR HOTKEY: Press 'A'
+    if (event.key.toLowerCase() === 'a') {
+        isAutopilotRunning = !isAutopilotRunning;
+        
+        if (isAutopilotRunning) {
+            console.log("🤖 Autopilot Engaged");
+            document.body.style.cursor = 'none'; 
+            
+            if (!isAudioInitialized) initAudioAPI();
+            if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+            
+            runTourStep();
+        } else {
+            console.log("🛑 Autopilot Disabled");
+            clearTimeout(autopilotTimer);
+            document.body.style.cursor = 'default'; 
+            // 🛑 CAMERA FIX: Stop rotating if autopilot is cancelled!
+            controls.autoRotate = false;
+            if (isCardLocked) window.closeHudCard(); 
+        }
+    }
 });
+
+function runTourStep() {
+    if (!isAutopilotRunning) return;
+
+    if (isCardLocked) {
+        window.closeHudCard();
+        autopilotTimer = setTimeout(runTourStep, 3000);
+        return;
+    }
+
+    const activeRemnants = remnantsGroup.children.filter(mesh => mesh.userData && mesh.userData.isActiveTerrain);
+    
+    if (activeRemnants.length === 0) {
+        autopilotTimer = setTimeout(runTourStep, 1000);
+        return;
+    }
+
+    const targetMesh = activeRemnants[currentTourIndex];
+    const data = targetMesh.userData;
+
+    const anchorPos = new THREE.Vector3(data.centroidX, 0, data.centroidZ);
+    loadLocalTerrain(data.remnantId, anchorPos, scene);
+
+    isCardLocked = true;
+    
+    visualHudCard.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px;">
+            <div style="color: #00ffcc; font-size: 10px; letter-spacing: 2px;">AUTOPILOT TOUR</div>
+        </div>
+        <div style="font-size: 18px; font-weight: bold; color: #fff; margin-bottom: 12px;">${data.name}</div>
+        <div style="font-size: 11px; color: #aaa;">Immersive Forest rendering online. Press 'A' to stop tour.</div>
+    `;
+    
+    if (gridHelper.visible) {
+        visualHudCard.style.display = 'block';
+        visualHudCard.style.opacity = "1";
+    }
+
+    targetCameraPosition = new THREE.Vector3(data.centroidX, 2.0, data.centroidZ + 15.0);
+    targetLookAtPosition = new THREE.Vector3(data.centroidX, 8.0, data.centroidZ);
+    
+    controls.maxPolarAngle = Math.PI; 
+    isSwooping = true;
+    controls.enabled = false; 
+    
+    if (gainNode && audioCtx) {
+        gainNode.gain.cancelScheduledValues(audioCtx.currentTime);
+        gainNode.gain.linearRampToValueAtTime(0.05, audioCtx.currentTime + 1.0);
+    }
+
+    currentTourIndex = (currentTourIndex + 1) % activeRemnants.length;
+
+    autopilotTimer = setTimeout(runTourStep, 8000);
+}
 
 function animate() {
     requestAnimationFrame(animate);
@@ -506,11 +603,19 @@ function animate() {
             
             isSwooping = false; 
             controls.enabled = true; 
+            
+            // 🎬 THE MAGIC FIX: Start the slow, cinematic rotation as soon as we arrive!
+            if (isAutopilotRunning) {
+                controls.autoRotate = true;
+                controls.autoRotateSpeed = 0.8; // A slow, sweeping pan around the trees
+            }
+            
             controls.update(); 
             triggerAudioVolumeSwell(0.75);
         }
     }
 
+    // OrbitControls requires .update() every frame for autoRotate to work!
     if (typeof controls !== 'undefined' && controls) {
         controls.update(); 
     }
