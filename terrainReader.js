@@ -15,6 +15,13 @@ function updateTerrainShaders() {
 }
 updateTerrainShaders(); 
 
+export function hideAllTerrains() {
+    terrainCache.forEach(mesh => {
+        mesh.visible = false;
+    });
+}
+
+// 🎯 EXACTLY 3 PARAMETERS: ID, Anchor Position, and Scene!
 export async function loadLocalTerrain(remnantId, anchorPosition, scene) {
     if (terrainCache.has(remnantId)) {
         terrainCache.get(remnantId).visible = true; 
@@ -32,8 +39,8 @@ export async function loadLocalTerrain(remnantId, anchorPosition, scene) {
         const rawData = await loader.loadAsync(r2Url);
         const lines = rawData.split('\n');
         
-        // 🎯 FIX 1: Trust CloudCompare! You already subsampled them, so we read 100% of the file.
-        const samplingStep = 1; 
+        const MAX_POINTS = 150000;
+        const samplingStep = lines.length > MAX_POINTS ? Math.ceil(lines.length / MAX_POINTS) : 1; 
 
         let minX = Infinity, maxX = -Infinity;
         let minY = Infinity, maxY = -Infinity;
@@ -45,9 +52,9 @@ export async function loadLocalTerrain(remnantId, anchorPosition, scene) {
             if (!line) continue;
             const coords = line.split(/[\s,]+/); 
             if (coords.length >= 3) {
-                const x = parseFloat(coords[0]);
-                const y = parseFloat(coords[1]); 
-                const z = parseFloat(coords[2]);
+                const x = parseFloat(coords[0]); // Easting
+                const y = parseFloat(coords[1]); // Northing
+                const z = parseFloat(coords[2]); // Elevation
                 if (!isNaN(x) && !isNaN(y) && !isNaN(z)) {
                     if (x < minX) minX = x; if (x > maxX) maxX = x;
                     if (y < minY) minY = y; if (y > maxY) maxY = y;
@@ -63,9 +70,9 @@ export async function loadLocalTerrain(remnantId, anchorPosition, scene) {
         const centerX = minX + (xDelta / 2);
         const centerY = minY + (yDelta / 2); 
 
-        // 🎯 THE DIORAMA SCALE
+        // 🎯 DIORAMA SCALE: Keeps the trees huge and majestic, decoupled from the tiny 2D map!
         const DIORAMA_SCALE = 0.045;  
-        const HEIGHT_EXAGGERATION = 7.5; 
+        const HEIGHT_EXAGGERATION = 6.0; 
 
         const positions = [];
         const normYArray = []; 
@@ -99,9 +106,18 @@ export async function loadLocalTerrain(remnantId, anchorPosition, scene) {
         geometry.setAttribute('aNormY', new THREE.Float32BufferAttribute(normYArray, 1));
         geometry.setAttribute('aRandom', new THREE.Float32BufferAttribute(randomArray, 1));
 
-        // 🎯 FIX 2: Point size increased to bridge the 1.0m to 4.0m gaps so they can overlap and glow!
+        // 🎨 VISUAL TUNING DICTIONARY
+        const visualTuning = {
+            "1": { size: 0.15, opacity: 0.40 }, // Victoria Park
+            "2": { size: 0.15, opacity: 0.40 }, // Booyong 
+            "3": { size: 0.12, opacity: 0.12 }, // Big Scrub (Very dense, needs low opacity)
+            "4": { size: 0.12, opacity: 0.15 }, // Minyon Falls
+            "5": { size: 0.15, opacity: 0.40 }  // Boomerang Falls
+        };
+        const tuning = visualTuning[remnantId] || { size: 0.15, opacity: 0.40 };
+
         const material = new THREE.PointsMaterial({
-            size: 0.25, 
+            size: tuning.size, 
             transparent: true,
             opacity: 0.0,
             blending: THREE.AdditiveBlending, 
@@ -133,10 +149,10 @@ export async function loadLocalTerrain(remnantId, anchorPosition, scene) {
                 #include <begin_vertex>
                 
                 vec3 groundColor = hsl2rgb(vec3(0.35, 0.80, 0.05)); 
-                vec3 gondwanaColor = hsl2rgb(vec3(0.35 + (aRandom * 0.04), 0.95, 0.45)); // Boosted color
-                vec3 malesianColor = hsl2rgb(vec3(0.55 + (aRandom * 0.04), 1.0, 0.50));  // Boosted color
+                vec3 gondwanaColor = hsl2rgb(vec3(0.35 + (aRandom * 0.04), 0.95, 0.45));
+                vec3 malesianColor = hsl2rgb(vec3(0.55 + (aRandom * 0.04), 1.0, 0.50));
                 
-                float wave = sin(position.x * 0.35 + uTime) + cos(position.z * 0.35 + uTime * 0.7);
+                float wave = sin(position.x * 12.0 + uTime) + cos(position.z * 12.0 + uTime * 0.7);
                 wave = (wave + 2.0) / 4.0; 
                 
                 float isGondwana = wave < uGondwanaRatio ? 1.0 : 0.0;
@@ -167,9 +183,7 @@ export async function loadLocalTerrain(remnantId, anchorPosition, scene) {
                 float dist = length(coord);
                 if (dist > 0.5) discard; 
                 
-                // 🎯 FIX 3: A sharp, crisp core with a soft halo for the perfect hologram effect
-                float glow = smoothstep(0.5, 0.0, dist); 
-                glow = pow(glow, 2.0); // Sharpens the core of the point
+                float glow = exp(-dist * dist * 14.0); 
                 
                 vec4 diffuseColor = vec4( vCustomColor, opacity * glow * vAlphaFade );
                 `
@@ -178,21 +192,21 @@ export async function loadLocalTerrain(remnantId, anchorPosition, scene) {
 
         const terrainPoints = new THREE.Points(geometry, material);
         
+        // 🎯 Pin the giant diorama piece perfectly to the map floor!
         terrainPoints.position.set(anchorPosition.x, 0.15, anchorPosition.z);
 
         scene.add(terrainPoints);
         terrainCache.set(remnantId, terrainPoints);
 
-        // 🎯 FIX 4: Raised the opacity cap so it is bright and visible against the black background!
         let frame = 0;
         function fade() {
             frame++;
-            material.opacity = THREE.MathUtils.lerp(0, 0.75, frame / 60);
+            material.opacity = THREE.MathUtils.lerp(0, tuning.opacity, frame / 60);
             if (frame < 60) requestAnimationFrame(fade);
         }
         fade();
 
-        console.log(`Successfully mapped Ghost Trees layer for Remnant ${remnantId}`);
+        console.log(`Successfully mapped Majestic layer for Remnant ${remnantId}`);
         return terrainPoints;
 
     } catch (error) {
