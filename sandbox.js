@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { loadLocalTerrain, hideAllTerrains } from './terrainReader.js';
+import { loadLocalTerrain, hideAllTerrains, createTerrainFromText, setGhostWind, toggleGhostDensity, getRemnantSettings } from './terrainReader.js';
 import { bigScrubEcosystem } from './speciesConfig.js'; 
 
 const scene = new THREE.Scene();
@@ -63,7 +63,8 @@ const floorMaterial = new THREE.MeshBasicMaterial({
     map: floorTexture,
     transparent: true,
     opacity: 0.45, 
-    side: THREE.DoubleSide
+    side: THREE.DoubleSide,
+    depthWrite: false
 });
 
 const floorMesh = new THREE.Mesh(floorGeometry, floorMaterial);
@@ -71,7 +72,7 @@ floorMesh.rotation.x = -Math.PI / 2;
 scene.add(floorMesh);
 
 const gridHelper = new THREE.GridHelper(70, 35, 0x44445c, 0x1f1f2e);
-gridHelper.position.y = -0.01; 
+gridHelper.position.y = 0.005; 
 scene.add(gridHelper);
 
 const genomicMatrixGroup = new THREE.Group();
@@ -226,7 +227,14 @@ async function loadGeoJsonAnchors() {
         const finalOffsetX = 0;          
         const finalOffsetZ = 0;         
 
+        window.MAP_GEO_TRANSFORM = { geoCenterX, geoCenterY, finalScaleX, finalScaleZ };         
+
         // 🔮 BIG SCRUB BOUNDARY VECTOR OVERLAY (Vivid purple/magenta contour)
+        const boundaryGroup = new THREE.Group();
+        boundaryGroup.name = "BoundaryGroup";
+        scene.add(boundaryGroup);
+        window.boundaryGroup = boundaryGroup;
+
         boundaryData.features.forEach(f => {
             const geom = f.geometry;
             if (!geom) return;
@@ -249,7 +257,7 @@ async function loadGeoJsonAnchors() {
                     const boundaryLine = new THREE.LineLoop(lineGeo, lineMat);
                     boundaryLine.name = "BigScrubBoundaryVector";
                     boundaryLine.renderOrder = 1;
-                    scene.add(boundaryLine);
+                    boundaryGroup.add(boundaryLine);
 
                     // Secondary outer glow loop for visual presence
                     const glowMat = new THREE.LineBasicMaterial({
@@ -262,7 +270,7 @@ async function loadGeoJsonAnchors() {
                     const glowLine = new THREE.LineLoop(lineGeo, glowMat);
                     glowLine.position.y = 0.015;
                     glowLine.renderOrder = 1;
-                    scene.add(glowLine);
+                    boundaryGroup.add(glowLine);
                 }
             });
         });
@@ -336,13 +344,14 @@ async function loadGeoJsonAnchors() {
                 const occluderMat = new THREE.MeshBasicMaterial({
                     color: 0x01130d,
                     side: THREE.DoubleSide,
-                    depthWrite: true,
+                    depthWrite: false,
                     depthTest: true
                 });
                 const occluderMesh = new THREE.Mesh(shapeGeo, occluderMat);
                 occluderMesh.rotation.x = -Math.PI / 2;
                 occluderMesh.position.y = 0.04;
                 occluderMesh.renderOrder = 2;
+                occluderMesh.userData = { remnantId: remnantId, isOccluder: true };
                 occluderMesh.raycast = () => {}; // Ignore raycasting so markerMesh receives hits directly
                 remnantsGroup.add(occluderMesh);
 
@@ -350,8 +359,8 @@ async function loadGeoJsonAnchors() {
                     color: isActive ? 0x00FF88 : 0x1b7340, 
                     side: THREE.DoubleSide,
                     transparent: true,
-                    opacity: isActive ? 0.85 : 0.5,
-                    depthWrite: true,
+                    opacity: isActive ? 0.60 : 0.40,
+                    depthWrite: false,
                     depthTest: true
                 });
 
@@ -377,6 +386,16 @@ async function loadGeoJsonAnchors() {
     }
 }
 loadGeoJsonAnchors();
+
+export function setRemnantMarkerVisibility(activeRemnantId) {
+    remnantsGroup.children.forEach(child => {
+        if (!child.userData) return;
+        child.visible = true;
+    });
+    if (window.boundaryGroup) {
+        window.boundaryGroup.visible = true;
+    }
+}
 
 // ==========================================
 // 🖥️ THE UNIFIED HUD INTERACTION SYSTEM
@@ -417,6 +436,105 @@ window.closeHudCard = function(e) {
     isSwooping = true;
 
     hideAllTerrains();
+    setRemnantMarkerVisibility(null);
+};
+
+function showLoadingProgress(displayName, statusText, percent = null) {
+    if (isAutopilotRunning) return;
+    visualHudCard.style.display = '';
+    isCardLocked = true;
+    visualHudCard.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px;">
+            <div style="color: #00ffcc; font-family: 'JetBrains Mono', monospace; font-size: 9.5px; font-weight: 500; letter-spacing: 2px;">STREAMING GHOST TREES LIDAR</div>
+            <button id="close-card-btn" onclick="window.closeHudCard(event)" style="background: none; border: none; color: white; cursor: pointer; font-size: 18px; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; touch-action: manipulation;">✕</button>
+        </div>
+        <div style="font-size: clamp(16px, 3.5vw, 18px); font-weight: 600; color: #fff; margin-bottom: 6px;">${displayName}</div>
+        <div id="loading-status-text" style="font-size: 11px; color: #00ffcc; font-family: 'JetBrains Mono', monospace; margin-bottom: 8px;">${statusText}</div>
+        <div style="width: 100%; height: 3px; background: rgba(0, 255, 204, 0.15); border-radius: 2px; overflow: hidden; margin-bottom: 8px;">
+            <div id="loading-progress-bar" style="width: ${percent !== null ? percent : 25}%; height: 100%; background: #00ffcc; transition: width 0.15s ease;"></div>
+        </div>
+        <div style="font-size: 11px; color: #8bb1a7; line-height: 1.5;">Streaming raw scientific LiDAR point cloud from Cloudflare R2 and synthesizing the spectral Ghost Trees canopy...</div>
+    `;
+    visualHudCard.classList.add('visible');
+}
+
+function renderRemnantCard(remnantId, displayName, pointCount) {
+    if (isAutopilotRunning) return;
+    visualHudCard.style.display = '';
+    const settings = getRemnantSettings(remnantId);
+    const countFormatted = typeof pointCount === 'number' ? pointCount.toLocaleString() : (pointCount || '188,396');
+    let densityLabel = 'DENSITY: ETHEREAL';
+    const idStr = String(remnantId);
+    if (idStr === '3') {
+        if (settings.samplingStep === 7) densityLabel = 'DENSITY: MAXIMUM (215K)';
+        else if (settings.samplingStep === 11) densityLabel = 'DENSITY: LUSH (137K)';
+        else densityLabel = 'DENSITY: ETHEREAL (94K)';
+    } else {
+        if (settings.samplingStep === 1) densityLabel = 'DENSITY: FULL SCAN';
+        else densityLabel = 'DENSITY: ETHEREAL';
+    }
+    const isWindOn = settings.ghostWind > 0;
+
+    visualHudCard.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px;">
+            <div style="color: #00ffcc; font-family: 'JetBrains Mono', monospace; font-size: 9.5px; font-weight: 500; letter-spacing: 2px;">GHOST TREES CANOPY ACTIVE</div>
+            <button id="close-card-btn" onclick="window.closeHudCard(event)" style="background: none; border: none; color: white; cursor: pointer; font-size: 18px; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; touch-action: manipulation;">✕</button>
+        </div>
+        <div style="font-size: clamp(16px, 3.5vw, 18px); font-weight: 600; color: #fff; margin-bottom: 4px;">${displayName}</div>
+        <div style="font-size: 11px; color: #00ffcc; font-family: 'JetBrains Mono', monospace; margin-bottom: 6px;">
+            ${countFormatted} SPECTRAL PARTICLES &bull; GHOST CANOPY SHADER
+        </div>
+        <div style="font-size: 11.5px; color: #cad8d3; line-height: 1.55; margin-bottom: 10px;">
+            Ethereal holographic reconstruction of the ancient rainforest canopy. Shimmering tree crowns sway with mountain breezes and pulse between the 53.5% Gondwana (emerald) & 46.5% Indo-Malesian (cyan) genomic lineages.
+        </div>
+        <div style="display: flex; gap: 6px; flex-wrap: wrap; border-top: 1px solid rgba(0,255,204,0.15); padding-top: 8px;">
+            <button id="btn-toggle-density" onclick="window.handleToggleDensity('${remnantId}')" style="background: rgba(0, 255, 204, 0.12); border: 1px solid rgba(0, 255, 204, 0.45); color: #00ffcc; font-family: 'JetBrains Mono', monospace; font-size: 10px; padding: 5px 9px; border-radius: 3px; cursor: pointer; touch-action: manipulation;">
+                ${densityLabel}
+            </button>
+            <button id="btn-toggle-wind" onclick="window.handleToggleWind('${remnantId}')" style="background: rgba(0, 255, 204, ${isWindOn ? '0.18' : '0.08'}); border: 1px solid rgba(0, 255, 204, 0.45); color: #00ffcc; font-family: 'JetBrains Mono', monospace; font-size: 10px; padding: 5px 9px; border-radius: 3px; cursor: pointer; touch-action: manipulation;">
+                CANOPY BREEZE: ${isWindOn ? 'ON' : 'OFF'}
+            </button>
+            <button id="btn-reload-cf" onclick="window.handleReloadRemnant('${remnantId}')" title="Force fresh reload from Cloudflare" style="background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.2); color: #a2c4bc; font-family: 'JetBrains Mono', monospace; font-size: 10px; padding: 5px 9px; border-radius: 3px; cursor: pointer; touch-action: manipulation;">
+                ↻ RE-FETCH
+            </button>
+        </div>
+    `;
+    visualHudCard.classList.add('visible');
+}
+
+window.handleToggleDensity = function(remnantId) {
+    const mesh = toggleGhostDensity(remnantId, scene);
+    const targetMarker = remnantsGroup.children.find(m => m.userData && m.userData.remnantId === remnantId);
+    const name = targetMarker ? targetMarker.userData.name : "Big Scrub Flora Reserve";
+    renderRemnantCard(remnantId, name, mesh?.userData?.pointCount);
+};
+
+window.handleToggleWind = function(remnantId) {
+    const settings = getRemnantSettings(remnantId);
+    const newState = !(settings.ghostWind > 0);
+    setGhostWind(remnantId, newState);
+    const targetMarker = remnantsGroup.children.find(m => m.userData && m.userData.remnantId === remnantId);
+    const name = targetMarker ? targetMarker.userData.name : "Big Scrub Flora Reserve";
+    const mesh = remnantsGroup.children.find(m => m.userData && m.userData.remnantId === remnantId);
+    renderRemnantCard(remnantId, name, mesh?.userData?.pointCount);
+};
+
+window.handleReloadRemnant = function(remnantId) {
+    const targetMarker = remnantsGroup.children.find(m => m.userData && m.userData.remnantId === remnantId);
+    if (!targetMarker) return;
+    const name = targetMarker.userData.name;
+    const anchorPos = new THREE.Vector3(targetMarker.userData.centroidX, 0, targetMarker.userData.centroidZ);
+    showLoadingProgress(name, "Re-fetching from Cloudflare...", 5);
+    loadLocalTerrain(remnantId, anchorPos, scene, (loaded, total, status) => {
+        const pct = total > 0 ? Math.round((loaded / total) * 100) : null;
+        const txtEl = document.getElementById('loading-status-text');
+        const barEl = document.getElementById('loading-progress-bar');
+        if (txtEl) txtEl.innerText = status;
+        if (barEl && pct !== null) barEl.style.width = `${pct}%`;
+    }, { forceReload: true }).then((terrainObj) => {
+        const count = terrainObj?.userData?.pointCount || terrainObj?.geometry?.attributes?.position?.count;
+        renderRemnantCard(remnantId, name, count);
+    });
 };
 
 const remnantTooltip = document.createElement('div');
@@ -459,6 +577,12 @@ window.addEventListener('mousemove', (event) => {
 });
 
 function checkHovers() {
+    if (isAutopilotRunning || isExhibitionMode) {
+        visualHudCard.style.display = 'none';
+        visualHudCard.classList.remove('visible');
+        remnantTooltip.style.display = 'none';
+        return;
+    }
     if (!window.matchMedia('(hover: hover)').matches) return;
     raycaster.setFromCamera(mouse, camera);
     let cursorIsPointer = false;
@@ -693,7 +817,13 @@ window.addEventListener('keydown', (event) => {
         gridHelper.visible = !gridHelper.visible;
         document.getElementById('btn-grid')?.classList.toggle('active', gridHelper.visible);
     }
+    if (key === 'e' || key === 'x') {
+        window.toggleExhibitionMode();
+    }
     if (event.key === 'Escape') {
+        if (isExhibitionMode) {
+            window.setExhibitionMode(false);
+        }
         const welcomeScreen = document.getElementById('welcome-screen');
         const creditsScreen = document.getElementById('credits-screen');
         const mobileHud = document.getElementById('mobile-hud');
@@ -713,6 +843,8 @@ window.addEventListener('keydown', (event) => {
     }
 });
 
+let wasGridVisibleBeforeAutopilot = true;
+
 function toggleFullscreen() {
     if (!document.fullscreenElement) {
         document.documentElement.requestFullscreen().catch(err => console.log(err));
@@ -727,30 +859,99 @@ function toggleAutopilot() {
     if (btn) btn.classList.toggle('active', isAutopilotRunning);
     
     if (isAutopilotRunning) {
-        console.log("🤖 Autopilot Engaged");
+        console.log("🤖 Autopilot / Cinematic Mode Engaged");
+        // Save current grid visibility and hide grid during cinematic tour
+        wasGridVisibleBeforeAutopilot = gridHelper.visible;
+        gridHelper.visible = false;
+        document.getElementById('btn-grid')?.classList.remove('active');
+
         document.body.style.cursor = 'none'; 
+        isCardLocked = false;
+        visualHudCard.classList.remove('visible');
+        visualHudCard.style.display = 'none';
+        visualHudCard.innerHTML = '';
+        remnantTooltip.style.display = 'none';
         
+        // Hide info & research documentation modals if currently open
+        const welcomeScreen = document.getElementById('welcome-screen');
+        const creditsScreen = document.getElementById('credits-screen');
+        if (welcomeScreen) { welcomeScreen.style.opacity = '0'; welcomeScreen.style.display = 'none'; }
+        if (creditsScreen) { creditsScreen.style.opacity = '0'; creditsScreen.style.display = 'none'; }
+
         if (!isAudioInitialized) initAudioAPI();
         runTourStep();
     } else {
-        console.log("🛑 Autopilot Disabled");
+        console.log("🛑 Autopilot / Cinematic Mode Disabled");
         clearTimeout(autopilotTimer);
         document.body.style.cursor = 'default'; 
         controls.autoRotate = false;
-        
+        visualHudCard.style.display = '';
+        visualHudCard.classList.remove('visible');
+        visualHudCard.innerHTML = '';
         if (isCardLocked) window.closeHudCard(); 
+        isCardLocked = false;
+
+        // Restore grid visibility
+        gridHelper.visible = wasGridVisibleBeforeAutopilot;
+        document.getElementById('btn-grid')?.classList.toggle('active', gridHelper.visible);
     }
 }
 window.toggleAutopilot = toggleAutopilot;
 
+// ==========================================
+// 🏛️ GRAD SHOW EXHIBITION MODE (Zero-UI Projection Flow)
+// ==========================================
+let isExhibitionMode = false;
+
+export function setExhibitionMode(enable) {
+    isExhibitionMode = !!enable;
+    const mobileHud = document.getElementById('mobile-hud');
+    const welcomeScreen = document.getElementById('welcome-screen');
+    const creditsScreen = document.getElementById('credits-screen');
+
+    if (isExhibitionMode) {
+        console.log("🏛️ Grad Show Exhibition Mode Engaged: Clean projection with continuous ambient tour");
+        if (welcomeScreen) { welcomeScreen.style.opacity = '0'; welcomeScreen.style.display = 'none'; }
+        if (creditsScreen) { creditsScreen.style.opacity = '0'; creditsScreen.style.display = 'none'; }
+        if (mobileHud) mobileHud.style.display = 'none';
+        
+        visualHudCard.style.display = 'none';
+        visualHudCard.classList.remove('visible');
+        visualHudCard.innerHTML = '';
+        remnantTooltip.style.display = 'none';
+        document.body.style.cursor = 'none';
+
+        if (!isAudioInitialized) initAudioAPI();
+        if (!isAutopilotRunning) toggleAutopilot();
+    } else {
+        console.log("🏛️ Exhibition Mode Disengaged: Interactive UX restored");
+        if (mobileHud) mobileHud.style.display = 'flex';
+        document.body.style.cursor = 'default';
+        visualHudCard.style.display = '';
+        if (isAutopilotRunning) toggleAutopilot();
+    }
+}
+window.setExhibitionMode = setExhibitionMode;
+window.toggleExhibitionMode = () => setExhibitionMode(!isExhibitionMode);
+
+// Auto-activate Exhibition Mode if URL shortcode / parameter is present
+// Examples: https://yourdomain.com/?exhibition=true or ?mode=exhibition or ?gradshow
+if (typeof window !== 'undefined' && window.location) {
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.has('exhibition') || urlParams.get('mode') === 'exhibition' || urlParams.has('gradshow')) {
+        setTimeout(() => setExhibitionMode(true), 350);
+    }
+}
+
 function runTourStep() {
     if (!isAutopilotRunning) return;
 
-    if (isCardLocked) {
-        window.closeHudCard();
-        autopilotTimer = setTimeout(runTourStep, 3000);
-        return;
-    }
+    // Cinematic mode: Keep all UI cards, overlays, and tooltips strictly hidden (no text)
+    isCardLocked = false;
+    visualHudCard.classList.remove('visible');
+    visualHudCard.style.display = 'none';
+    visualHudCard.innerHTML = '';
+    remnantTooltip.style.display = 'none';
 
     const activeRemnants = remnantsGroup.children.filter(mesh => mesh.userData && mesh.userData.isActiveTerrain);
     
@@ -763,39 +964,33 @@ function runTourStep() {
     const data = targetMesh.userData;
 
     hideAllTerrains();
+    setRemnantMarkerVisibility(data.remnantId);
     const anchorPos = new THREE.Vector3(data.centroidX, 0, data.centroidZ);
     loadLocalTerrain(data.remnantId, anchorPos, scene);
 
-    isCardLocked = true;
+    targetCameraPosition = new THREE.Vector3(data.centroidX, 8.5, data.centroidZ + 16.0);
+    targetLookAtPosition = new THREE.Vector3(data.centroidX, 2.5, data.centroidZ);
     
-    visualHudCard.innerHTML = `
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-            <div style="color: #00ffcc; font-family: 'JetBrains Mono', monospace; font-size: 9.5px; font-weight: 500; letter-spacing: 2px;">AUTOPILOT TOUR</div>
-            <button id="btn-stop-tour" onclick="window.toggleAutopilot()" style="background: rgba(0, 255, 204, 0.14); border: 1px solid rgba(0, 255, 204, 0.45); color: #00ffd0; font-family: 'Plus Jakarta Sans', sans-serif; font-size: 10px; font-weight: 600; letter-spacing: 1.5px; padding: 5px 11px; border-radius: 3px; cursor: pointer; text-transform: uppercase; touch-action: manipulation;">Stop Tour ✕</button>
-        </div>
-        <div style="font-size: clamp(16px, 3.5vw, 18px); font-weight: 600; color: #fff; margin-bottom: 6px;">${data.name}</div>
-        <div style="font-size: 11.5px; color: #cad8d3; line-height: 1.55;">Immersive canopy online. Tap Stop or the top-right tour icon to resume free exploration.</div>
-    `;
-    
-    if (gridHelper.visible) {
-        visualHudCard.classList.add('visible');
-    }
-
-    targetCameraPosition = new THREE.Vector3(data.centroidX, 2.0, data.centroidZ + 15.0);
-    targetLookAtPosition = new THREE.Vector3(data.centroidX, 8.0, data.centroidZ);
-    
-    controls.maxPolarAngle = Math.PI; 
+    controls.maxPolarAngle = Math.PI * 0.46; 
     isSwooping = true;
     controls.enabled = false; 
 
     currentTourIndex = (currentTourIndex + 1) % activeRemnants.length;
-    autopilotTimer = setTimeout(runTourStep, 8000);
+    autopilotTimer = setTimeout(runTourStep, 9500);
 }
 
 window.addEventListener('click', (event) => {
+    // In exhibition mode, clicks never interrupt the continuous exhibition display
+    if (isExhibitionMode) return;
     // Prevent dragging/pinching rotation on mobile/tablets from triggering accidental click
     if (isDraggingPointer) return;
     if (event.target.id === 'close-card-btn' || event.target.closest('#close-card-btn') || event.target.closest('#mobile-hud') || event.target.closest('#welcome-screen') || event.target.closest('#credits-screen')) return;
+
+    // If autopilot is running and user clicks the scene, disengage cinematic tour to grant manual control without clicking through to a card
+    if (isAutopilotRunning) {
+        toggleAutopilot();
+        return;
+    }
 
     const rect = renderer.domElement.getBoundingClientRect();
     mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
@@ -819,27 +1014,28 @@ window.addEventListener('click', (event) => {
             const remnantId = hitObject.userData.remnantId;
 
             hideAllTerrains();
+            setRemnantMarkerVisibility(remnantId);
             const targetX = hitObject.userData.centroidX;
             const targetZ = hitObject.userData.centroidZ;
             const anchorPos = new THREE.Vector3(targetX, 0, targetZ);
             
-            loadLocalTerrain(remnantId, anchorPos, scene);
+            showLoadingProgress(hitObject.userData.name, "Streaming Ghost Trees LiDAR from Cloudflare R2...", 10);
 
-            isCardLocked = true;
-            visualHudCard.innerHTML = `
-                <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px;">
-                    <div style="color: #00ffcc; font-family: 'JetBrains Mono', monospace; font-size: 9.5px; font-weight: 500; letter-spacing: 2px;">RESERVE ACTIVE</div>
-                    <button id="close-card-btn" onclick="window.closeHudCard(event)" style="background: none; border: none; color: white; cursor: pointer; font-size: 18px; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; touch-action: manipulation;">✕</button>
-                </div>
-                <div style="font-size: clamp(16px, 3.5vw, 18px); font-weight: 600; color: #fff; margin-bottom: 8px;">${hitObject.userData.name}</div>
-                <div style="font-size: 11.5px; color: #cad8d3; line-height: 1.55;">Immersive 3D LiDAR canopy online. Explore via touch gestures or mouse drag.</div>
-            `;
-            visualHudCard.classList.add('visible');
+            loadLocalTerrain(remnantId, anchorPos, scene, (loaded, total, status) => {
+                const pct = total > 0 ? Math.round((loaded / total) * 100) : null;
+                const txtEl = document.getElementById('loading-status-text');
+                const barEl = document.getElementById('loading-progress-bar');
+                if (txtEl) txtEl.innerText = status;
+                if (barEl && pct !== null) barEl.style.width = `${pct}%`;
+            }).then((terrainObj) => {
+                const count = terrainObj?.userData?.pointCount || terrainObj?.geometry?.attributes?.position?.count;
+                renderRemnantCard(remnantId, hitObject.userData.name, count);
+            });
 
-            targetCameraPosition = new THREE.Vector3(targetX, 2.0, targetZ + 15.0);
-            targetLookAtPosition = new THREE.Vector3(targetX, 8.0, targetZ);
+            targetCameraPosition = new THREE.Vector3(targetX, 8.5, targetZ + 16.0);
+            targetLookAtPosition = new THREE.Vector3(targetX, 2.5, targetZ);
             
-            controls.maxPolarAngle = Math.PI; 
+            controls.maxPolarAngle = Math.PI * 0.46; 
             isSwooping = true;
             controls.enabled = false; 
             return;
@@ -887,6 +1083,16 @@ window.addEventListener('click', (event) => {
         }
     }
 });
+
+// Remove any lingering test remnant buttons or inputs if present in the DOM
+if (typeof document !== 'undefined') {
+    document.getElementById('btn-quick-upload')?.remove();
+    document.getElementById('btn-upload-xyz')?.remove();
+    document.getElementById('xyz-file-input')?.remove();
+    document.querySelectorAll('.test-remnant-box, [id*="quick-upload"]').forEach(el => el.remove());
+}
+
+
 
 function animate() {
     requestAnimationFrame(animate);
